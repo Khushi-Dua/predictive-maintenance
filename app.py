@@ -211,6 +211,9 @@ CSS = """
 body { background: #0f1117; }
 .gradio-container { background: #0f1117 !important; }
 footer { display: none !important; }
+.gr-prose, .gr-markdown, label, .svelte-1gfkn6j { color: #E0E0E0 !important; }
+table { color: #E0E0E0 !important; border-color: #2d3250 !important; }
+th, td { color: #E0E0E0 !important; border-color: #2d3250 !important; background: #1e2130 !important; }
 """
 
 with gr.Blocks(css=CSS, title="Predictive Maintenance — Mexmon Technologies") as demo:
