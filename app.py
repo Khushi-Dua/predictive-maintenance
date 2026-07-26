@@ -143,7 +143,7 @@ def make_sensor_plot(df, sensors):
 
 current_df = {"data": None}
 
-def run_predict(file, use_demo):
+def run_predict(file, unit_number, use_demo):
     df = None
     if use_demo:
         df  = generate_demo_data()
@@ -154,7 +154,15 @@ def run_predict(file, use_demo):
             if df.shape[1] >= len(COLS):
                 df = df.iloc[:, :len(COLS)]
                 df.columns = COLS
-                msg = f"✅ Loaded {len(df)} rows successfully."
+                if "unit_number" in df.columns and df["unit_number"].nunique() > 1:
+                    unit_number = int(unit_number)
+                    df = df[df["unit_number"] == unit_number].reset_index(drop=True)
+                    if len(df) == 0:
+                        return (f"❌ No data found for unit {unit_number}.", "", "", "", None, None,
+                                gr.update(choices=[]))
+                    msg = f"✅ Loaded {len(df)} rows for unit {unit_number}."
+                else:
+                    msg = f"✅ Loaded {len(df)} rows successfully."
             else:
                 return ("❌ Not enough columns in CSV.", "", "", "", None, None,
                         gr.update(choices=[]))
@@ -195,10 +203,11 @@ with gr.Blocks(theme=gr.themes.Default(), title="Predictive Maintenance — Mexm
 
     with gr.Row():
         with gr.Column(scale=2):
-            file_input = gr.File(label="Upload Sensor CSV", file_types=[".csv", ".txt"])
-            use_demo   = gr.Checkbox(label="Run on demo data instead (no upload needed)", value=False)
-            run_btn    = gr.Button("▶  Run Prediction", variant="primary", size="lg")
-            status_msg = gr.Textbox(label="Status", interactive=False)
+            file_input  = gr.File(label="Upload Sensor CSV", file_types=[".csv", ".txt"])
+            unit_select = gr.Number(label="Unit Number to Analyze (for multi-unit files)", value=1, precision=0)
+            use_demo    = gr.Checkbox(label="Run on demo data instead (no upload needed)", value=False)
+            run_btn     = gr.Button("▶  Run Prediction", variant="primary", size="lg")
+            status_msg  = gr.Textbox(label="Status", interactive=False)
 
         with gr.Column(scale=1):
             gr.Markdown("### Model Results (Official Test Set — 707 units)")
@@ -243,7 +252,7 @@ with gr.Blocks(theme=gr.themes.Default(), title="Predictive Maintenance — Mexm
 
     run_btn.click(
         fn=run_predict,
-        inputs=[file_input, use_demo],
+        inputs=[file_input, unit_select, use_demo],
         outputs=[status_msg, rul_lstm_out, rul_xgb_out, status_out,
                  gauge_out, sensor_plot, sensor_select]
     )
