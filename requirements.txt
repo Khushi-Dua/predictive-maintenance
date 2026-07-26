@@ -1,4 +1,3 @@
-tensorflow-cpu
 gradio
 numpy
 pandas
@@ -6,3 +5,4 @@ matplotlib
 scikit-learn
 xgboost
 joblib
+tensorflow-cpu
