@@ -319,4 +319,4 @@ Built during internship using NASA CMAPSS dataset as a domain-general proxy for 
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0", server_port=7860)
