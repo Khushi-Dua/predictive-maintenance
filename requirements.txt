@@ -5,4 +5,5 @@ matplotlib
 scikit-learn
 xgboost
 joblib
+keras>=3.13.0
 tensorflow-cpu
