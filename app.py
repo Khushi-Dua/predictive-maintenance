@@ -19,10 +19,8 @@ def load_models():
             path = os.path.join(MODEL_DIR, f"ensemble_lstm_{i}.keras")
             if os.path.exists(path):
                 ensemble.append(tf.keras.models.load_model(path))
-        if ensemble:
-            print(f"Loaded {len(ensemble)} LSTM models.")
     except Exception as e:
-        print(f"TF not available, XGBoost only: {e}")
+        print(f"TF not available: {e}")
 
     xgb = None
     try:
@@ -31,7 +29,6 @@ def load_models():
         xgb_path = os.path.join(MODEL_DIR, "xgboost_rul.json")
         if os.path.exists(xgb_path):
             xgb.load_model(xgb_path)
-            print("XGBoost loaded.")
     except Exception as e:
         print(f"XGBoost error: {e}")
 
@@ -46,14 +43,13 @@ def load_models():
 
 ensemble_models, xgb_model, scaler, useful_sensors = load_models()
 SEQUENCE_LENGTH = 30
-
 COLS = (
-    ["unit_number", "time_cycle", "op_setting_1", "op_setting_2", "op_setting_3"]
+    ["unit_number","time_cycle","op_setting_1","op_setting_2","op_setting_3"]
     + [f"sensor_{i}" for i in range(1, 22)]
 )
 
 def generate_demo_data(n_cycles=80, seed=42):
-    rng = np.random.RandomState(seed)
+    rng  = np.random.RandomState(seed)
     rows = []
     for t in range(1, n_cycles + 1):
         frac    = t / n_cycles
@@ -64,7 +60,7 @@ def generate_demo_data(n_cycles=80, seed=42):
 
 def predict_rul(df):
     if useful_sensors is None or scaler is None:
-        return None, None, None, "Models not loaded"
+        return None, None, None, "Model files not found in /models folder"
     missing = [s for s in useful_sensors if s not in df.columns]
     if missing:
         return None, None, None, f"Missing columns: {missing}"
@@ -72,7 +68,6 @@ def predict_rul(df):
     df = df.copy()
     df[useful_sensors] = scaler.transform(df[useful_sensors])
     data = df[useful_sensors].values
-
     if len(data) >= SEQUENCE_LENGTH:
         window = data[-SEQUENCE_LENGTH:]
     else:
@@ -82,83 +77,67 @@ def predict_rul(df):
     window_3d = window[np.newaxis, :, :]
     window_2d = window.reshape(1, -1)
 
-    # LSTM ensemble (if available)
+    rul_lstm = None
     if ensemble_models:
         preds    = [m.predict(window_3d, verbose=0).flatten()[0] for m in ensemble_models]
         rul_lstm = float(np.mean(preds))
-    else:
-        rul_lstm = None
 
-    # XGBoost
-    if xgb_model:
-        rul_xgb = float(xgb_model.predict(window_2d)[0])
-    else:
-        rul_xgb = 80.0
-
-    # Use XGBoost as primary if LSTM not available
+    rul_xgb = float(xgb_model.predict(window_2d)[0]) if xgb_model else 80.0
     rul_primary = rul_lstm if rul_lstm is not None else rul_xgb
 
-    # Anomaly detection
     iso      = IsolationForest(contamination=0.05, random_state=42)
-    iso_flag = iso.fit_predict(window_2d) == -1
-    anomaly  = bool(iso_flag[0])
+    anomaly  = bool(iso.fit_predict(window_2d)[0] == -1)
 
     return rul_primary, rul_xgb, anomaly, None
 
 def classify_health(rul, anomaly):
-    if anomaly:
+    if anomaly or rul <= 20:
         return "🔴 Maintenance Due"
-    if rul > 50:
-        return "🟢 Healthy"
-    elif rul > 20:
+    elif rul <= 50:
         return "🟡 Watch"
     else:
-        return "🔴 Maintenance Due"
+        return "🟢 Healthy"
 
 def make_gauge(rul):
-    fig, ax = plt.subplots(figsize=(10, 1.4))
-    fig.patch.set_facecolor("#0f1117")
-    ax.set_facecolor("#0f1117")
-    ax.barh(0, 50,  left=0,  height=0.5, color="#F44336", alpha=0.9)
-    ax.barh(0, 30,  left=50, height=0.5, color="#FFC107", alpha=0.9)
-    ax.barh(0, 45,  left=80, height=0.5, color="#4CAF50", alpha=0.9)
+    fig, ax = plt.subplots(figsize=(9, 1.6))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+    ax.barh(0, 50,  left=0,  height=0.5, color="#ef5350", alpha=0.9, label="Critical (0–50)")
+    ax.barh(0, 30,  left=50, height=0.5, color="#FFA726", alpha=0.9, label="Watch (50–80)")
+    ax.barh(0, 45,  left=80, height=0.5, color="#66BB6A", alpha=0.9, label="Healthy (80–125)")
     rul_c = min(max(rul, 0), 125)
-    ax.axvline(rul_c, color="white", linewidth=3)
-    ax.text(rul_c + 1, 0, f"  {rul:.1f}", color="white", va="center",
-            fontsize=11, fontweight="bold")
+    ax.axvline(rul_c, color="#1a1a2e", linewidth=4)
+    ax.text(rul_c + 1.5, 0.01, f"{rul:.1f}", color="#1a1a2e",
+            va="center", fontsize=12, fontweight="bold")
     ax.set_xlim(0, 125)
     ax.set_yticks([])
-    ax.set_xlabel("RUL (cycles)", color="white", fontsize=10)
-    ax.tick_params(colors="white")
+    ax.set_xlabel("Remaining Useful Life (cycles)", fontsize=10, color="#333")
+    ax.tick_params(colors="#333")
     for spine in ax.spines.values():
-        spine.set_color("#2d3250")
-    red_p = mpatches.Patch(color="#F44336", label="Critical (0–50)")
-    yel_p = mpatches.Patch(color="#FFC107", label="Watch (50–80)")
-    grn_p = mpatches.Patch(color="#4CAF50", label="Healthy (80–125)")
-    ax.legend(handles=[red_p, yel_p, grn_p], loc="upper left",
-              facecolor="#1e2130", labelcolor="white", fontsize=8)
+        spine.set_color("#ccc")
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.9)
     plt.tight_layout()
     return fig
 
 def make_sensor_plot(df, sensors):
     if not sensors:
         return None
+    colors = ["#1565C0","#2E7D32","#E65100","#6A1B9A",
+              "#00838F","#558B2F","#AD1457","#4527A0"]
     fig, axes = plt.subplots(len(sensors), 1,
-                             figsize=(11, 3 * len(sensors)), squeeze=False)
-    fig.patch.set_facecolor("#0f1117")
-    colors = ["#4FC3F7","#81C784","#FFB74D","#F48FB1",
-              "#CE93D8","#80DEEA","#FFCC02","#FF8A65"]
+                             figsize=(11, 2.8 * len(sensors)), squeeze=False)
+    fig.patch.set_facecolor("white")
     for idx, sensor in enumerate(sensors):
         ax = axes[idx][0]
-        ax.set_facecolor("#1e2130")
+        ax.set_facecolor("#f8f9fa")
         if sensor in df.columns:
             ax.plot(df["time_cycle"], df[sensor],
-                    color=colors[idx % len(colors)], linewidth=1.5)
-        ax.set_title(sensor, color="white", fontsize=10)
-        ax.tick_params(colors="#B0BEC5")
+                    color=colors[idx % len(colors)], linewidth=1.8)
+        ax.set_title(sensor, fontsize=11, fontweight="bold", color="#1a1a2e")
+        ax.tick_params(colors="#555")
+        ax.set_xlabel("Cycle", fontsize=9, color="#555")
         for spine in ax.spines.values():
-            spine.set_color("#2d3250")
-        ax.set_xlabel("Cycle", color="#B0BEC5", fontsize=8)
+            spine.set_color("#ddd")
     plt.tight_layout()
     return fig
 
@@ -168,28 +147,28 @@ def run_predict(file, use_demo):
     df = None
     if use_demo:
         df  = generate_demo_data()
-        msg = "Running on synthetic demo data (80 cycles)."
+        msg = "✅ Running on synthetic demo data (80 cycles)."
     elif file is not None:
         try:
             df = pd.read_csv(file.name, sep=None, engine="python", header=None)
             if df.shape[1] >= len(COLS):
                 df = df.iloc[:, :len(COLS)]
                 df.columns = COLS
-                msg = f"✅ Loaded {len(df)} rows."
+                msg = f"✅ Loaded {len(df)} rows successfully."
             else:
-                return ("❌ Not enough columns.", "", "", "", None, None,
+                return ("❌ Not enough columns in CSV.", "", "", "", None, None,
                         gr.update(choices=[]))
         except Exception as e:
-            return (f"❌ Error: {e}", "", "", "", None, None,
+            return (f"❌ Error reading file: {e}", "", "", "", None, None,
                     gr.update(choices=[]))
     else:
-        return ("⚠️ Upload a CSV or click Run Demo.", "", "", "", None, None,
+        return ("⚠️ Upload a CSV or tick 'Run on demo data'.", "", "", "", None, None,
                 gr.update(choices=[]))
 
     current_df["data"] = df
     rul_primary, rul_xgb, anomaly, err = predict_rul(df)
     if err:
-        return (err, "", "", "", None, None, gr.update(choices=[]))
+        return (f"❌ {err}", "", "", "", None, None, gr.update(choices=[]))
 
     status     = classify_health(rul_primary, anomaly)
     gauge      = make_gauge(rul_primary)
@@ -207,68 +186,59 @@ def update_sensor_plot(selected_sensors):
         return None
     return make_sensor_plot(df, selected_sensors)
 
-CSS = """
-body { background: #0f1117; }
-.gradio-container { background: #0f1117 !important; }
-footer { display: none !important; }
-.gr-prose, .gr-markdown, label, .svelte-1gfkn6j { color: #E0E0E0 !important; }
-table { color: #E0E0E0 !important; border-color: #2d3250 !important; }
-th, td { color: #E0E0E0 !important; border-color: #2d3250 !important; background: #1e2130 !important; }
-"""
+with gr.Blocks(theme=gr.themes.Default(), title="Predictive Maintenance — Mexmon Technologies") as demo:
 
-with gr.Blocks(css=CSS, title="Predictive Maintenance — Mexmon Technologies") as demo:
-    gr.Markdown("""
-# ⚙️ Predictive Maintenance System
-**Mexmon Technologies — Design & Automation Division**
-
-Forecasts **Remaining Useful Life (RUL)** of industrial equipment from sensor data.
-
----
-    """)
+    gr.Markdown("# ⚙️ Predictive Maintenance System")
+    gr.Markdown("**Mexmon Technologies — Design & Automation Division**")
+    gr.Markdown("Forecasts **Remaining Useful Life (RUL)** of industrial equipment from sensor data.")
+    gr.Markdown("---")
 
     with gr.Row():
         with gr.Column(scale=2):
             file_input = gr.File(label="Upload Sensor CSV", file_types=[".csv", ".txt"])
-            use_demo   = gr.Checkbox(label="Run on demo data instead", value=False)
-            run_btn    = gr.Button("▶ Run Prediction", variant="primary", size="lg")
+            use_demo   = gr.Checkbox(label="Run on demo data instead (no upload needed)", value=False)
+            run_btn    = gr.Button("▶  Run Prediction", variant="primary", size="lg")
             status_msg = gr.Textbox(label="Status", interactive=False)
-        with gr.Column(scale=1):
-            gr.Markdown("""
-### Results (Official Test Set — 707 units)
-| Model | RMSE | MAE |
-|---|---|---|
-| Single LSTM | 26.86 | 18.57 |
-| **Ensemble LSTM** | **26.31** | **18.39** |
-| XGBoost | 26.62 | 18.78 |
 
-🟢 **Healthy** — RUL > 50  
+        with gr.Column(scale=1):
+            gr.Markdown("### Model Results (Official Test Set — 707 units)")
+            gr.Dataframe(
+                value=pd.DataFrame({
+                    "Model":  ["Single LSTM", "Ensemble LSTM ★", "XGBoost"],
+                    "RMSE":   [26.86, 26.31, 26.62],
+                    "MAE":    [18.57, 18.39, 18.78]
+                }),
+                interactive=False
+            )
+            gr.Markdown("""
+🟢 **Healthy** — RUL > 50, no anomaly  
 🟡 **Watch** — 20 < RUL ≤ 50  
-🔴 **Maintenance Due** — RUL ≤ 20 or anomaly
+🔴 **Maintenance Due** — RUL ≤ 20 or anomaly flagged
             """)
 
     gr.Markdown("---")
     gr.Markdown("### Prediction Results")
 
     with gr.Row():
-        rul_lstm_out = gr.Textbox(label="Ensemble LSTM — RUL", interactive=False)
-        rul_xgb_out  = gr.Textbox(label="XGBoost — RUL",       interactive=False)
-        status_out   = gr.Textbox(label="Health Status",        interactive=False)
+        rul_lstm_out = gr.Textbox(label="Ensemble LSTM — Predicted RUL", interactive=False)
+        rul_xgb_out  = gr.Textbox(label="XGBoost — Predicted RUL",       interactive=False)
+        status_out   = gr.Textbox(label="Health Status",                  interactive=False)
 
     gauge_out = gr.Plot(label="RUL Health Gauge")
 
     gr.Markdown("---")
     gr.Markdown("### Sensor Trends")
     sensor_select = gr.CheckboxGroup(
-        label="Select sensors to plot",
+        label="Select sensors to visualise",
         choices=[f"sensor_{i}" for i in range(1, 22)],
         value=["sensor_2", "sensor_7", "sensor_11", "sensor_14"]
     )
     sensor_plot = gr.Plot(label="Sensor Degradation Over Time")
 
+    gr.Markdown("---")
     gr.Markdown("""
----
-**Intern:** Khushi Dua | **Organisation:** Mexmon Technologies | **Duration:** May–July 2025  
-**Dataset:** NASA CMAPSS (FD001–FD004) | **Models:** Ensemble LSTM + XGBoost + Isolation Forest
+**Intern:** Khushi Dua &nbsp;|&nbsp; **Organisation:** Mexmon Technologies &nbsp;|&nbsp; **Duration:** May–July 2025  
+**Dataset:** NASA CMAPSS (FD001–FD004) — 707 test units &nbsp;|&nbsp; **Models:** Ensemble LSTM + XGBoost + Isolation Forest
     """)
 
     run_btn.click(
